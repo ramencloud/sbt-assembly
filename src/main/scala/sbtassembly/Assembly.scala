@@ -4,18 +4,15 @@ import sbt._
 import Keys._
 import Path.relativeTo
 import java.security.MessageDigest
-import java.io.{IOException, File}
+import java.io.{File, IOException}
 import scala.collection.mutable
 import Def.Initialize
 import PluginCompat._
 import com.eed3si9n.jarjarabrams._
+import scala.collection.parallel.immutable.ParVector
 
 object Assembly {
   import AssemblyPlugin.autoImport.{ Assembly => _, _ }
-
-  // used for contraband
-  type SeqFileToSeqFile = Seq[File] => Seq[File]
-  type SeqString = Seq[String]
 
   private val scalaPre213Libraries = Vector(
     "scala-actors",
@@ -43,8 +40,9 @@ object Assembly {
     import java.util.jar.{Attributes, Manifest}
 
     lazy val (ms: Vector[(File, String)], stratMapping: List[(String, MergeStrategy)]) = {
-      log.debug("Merging files...")
+      log.info("Merging files...")
       applyStrategies(mappings, ao.mergeStrategy, ao.assemblyDirectory.get, log)
+      // ao.assemblyUnzipDirectory.get
     }
     def makeJar(outPath: File): Unit = {
       import Package._
@@ -66,7 +64,7 @@ object Assembly {
                 time = option.asInstanceOf[{def value: Option[Long]}].value
               } catch {
                 case e: Throwable =>
-                  log.debug(e.toString)
+                  log.info(e.toString)
               }
             } else {
               log.warn("Ignored unknown package option " + option)
@@ -95,7 +93,7 @@ object Assembly {
           )
         } catch {
           case e: Throwable =>
-            log.debug(e.toString)
+            log.info(e.toString)
         }
       }
       ao.prependShellScript foreach { shellScript: Seq[String] =>
@@ -116,7 +114,7 @@ object Assembly {
       }
     }
     lazy val inputs = {
-      log.debug("Checking every *.class/*.jar file's SHA-1.")
+      log.info("Checking every *.class/*.jar file's SHA-1.")
       val rawHashBytes =
         (mappings.toVector.par flatMap { m =>
           m.sourcePackage match {
@@ -136,7 +134,7 @@ object Assembly {
     val cachedMakeJar = inputChanged(cacheDir / "assembly-inputs") { (inChanged, inputs: Seq[Byte]) =>
       outputChanged(cacheDir / "assembly-outputs") { (outChanged, jar: PlainFileInfo) =>
         if (inChanged) {
-          log.debug("SHA-1: " + bytesToString(inputs))
+          log.info("SHA-1: " + bytesToString(inputs))
         } // if
         if (inChanged || outChanged) makeJar(out)
         else log.info("Assembly up to date: " + jar.file)
@@ -217,26 +215,42 @@ object Assembly {
 
   // even though fullClasspath includes deps, dependencyClasspath is needed to figure out
   // which jars exactly belong to the deps for packageDependency option.
-  def assembleMappings(classpath: Classpath, dependencies: Classpath,
-      ao: AssemblyOption, log: Logger): Vector[MappingSet] = {
-    val tempDir = ao.assemblyDirectory.get
-    if (!ao.cacheUnzip) IO.delete(tempDir)
-    if (!tempDir.exists) tempDir.mkdir()
+  def assembleMappings(
+      classpath: Classpath,
+      dependencies: Classpath,
+      ao: AssemblyOption,
+      log: Logger
+  ): Vector[MappingSet] = {
+    val assemblyDir = ao.assemblyDirectory.get
+    val assemblyUnzipDir = ao.assemblyUnzipDirectory.getOrElse(assemblyDir)
+    val isSameDir: Boolean = assemblyDir == assemblyUnzipDir
+
+    if (!ao.cacheUnzip) ao.assemblyUnzipDirectory.foreach{ IO.delete }
+
+    if (!assemblyDir.exists) IO.createDirectory(assemblyDir)
+    if (!assemblyUnzipDir.exists) IO.createDirectory(assemblyUnzipDir)
+
+    val useHardLinks: Boolean = ao.useHardLinks && !isSameDir && {
+      val isHardLinkSupported = AssemblyUtils.isHardLinkSupported(sourceDir = assemblyUnzipDir, destDir = assemblyDir)
+      if (!isHardLinkSupported) log.warn(s"useHardLinks is enabled, but file system doesn't support hardlinks between from $assemblyUnzipDir to $assemblyDir")
+      isHardLinkSupported
+    }
 
     val shadeRules = ao.shadeRules
 
-    val (libs, dirs) = classpath.toVector.sortBy(_.data.getCanonicalPath).partition(c => ClasspathUtilities.isArchive(c.data))
+    val (libs: Vector[Attributed[File]], dirs: Vector[Attributed[File]]) =
+      classpath.toVector.sortBy(_.data.getCanonicalPath).partition(c => ClasspathUtilities.isArchive(c.data))
 
-    val depLibs      = dependencies.map(_.data).toSet.filter(ClasspathUtilities.isArchive)
-    val excludedJars = ao.excludedJars map {_.data}
+    val depLibs: Set[File]      = dependencies.map(_.data).toSet.filter(ClasspathUtilities.isArchive)
+    val excludedJars: Seq[File] = ao.excludedJars map {_.data}
 
-    val scalaLibraries = {
+    val scalaLibraries: Vector[String] = {
       val scalaVersionParts = VersionNumber(ao.scalaVersion)
       val isScala213AndLater = scalaVersionParts.numbers.length>=2 && scalaVersionParts._1.get>=2 && scalaVersionParts._2.get>=13
       if (isScala213AndLater) scala213AndLaterLibraries else scalaPre213Libraries
     }
 
-    val libsFiltered = libs flatMap {
+    val libsFiltered: Vector[Attributed[File]] = libs flatMap {
       case jar if excludedJars contains jar.data.asFile => None
       case jar if isScalaLibraryFile(scalaLibraries, jar.data.asFile) =>
         if (ao.includeScala) Some(jar) else None
@@ -245,16 +259,16 @@ object Assembly {
       case jar =>
         if (ao.includeBin) Some(jar) else None
     }
-    val dirRules = shadeRules.filter(_.isApplicableToCompiling)
-    val dirsFiltered =
+    val dirRules: Seq[ShadeRule] = shadeRules.filter(_.isApplicableToCompiling)
+    val dirsFiltered: ParVector[File] =
       dirs.par flatMap {
         case dir =>
           if (ao.includeBin) Some(dir)
           else None
       } map { dir =>
         val hash = sha1name(dir.data)
-        IO.write(tempDir / (hash + "_dir.dir"), dir.data.getCanonicalPath, IO.utf8, false)
-        val dest = tempDir / (hash + "_dir")
+        IO.write(assemblyDir / (hash + "_dir.dir"), dir.data.getCanonicalPath, IO.utf8, false)
+        val dest = assemblyDir / (hash + "_dir")
         if (dest.exists) {
           IO.delete(dest)
         }
@@ -268,62 +282,105 @@ object Assembly {
         }
         dest
       }
-    val jarDirs =
-      (for(jar <- libsFiltered.par) yield {
+
+    val jarDirs: ParVector[(File, File)] =
+      for(jar <- libsFiltered.par) yield {
         val jarName = jar.data.asFile.getName
         val jarRules = shadeRules
-          .filter(r => (r.isApplicableToAll ||
+          .filter(r => r.isApplicableToAll ||
             jar.metadata.get(moduleID.key)
               .map(m => ModuleCoordinate(m.organization, m.name, m.revision))
-              .exists(r.isApplicableTo)))
+              .exists(r.isApplicableTo))
         val hash = sha1name(jar.data) + "_" + sha1content(jar.data) + "_" + sha1rules(jarRules)
-        val jarNamePath = tempDir / (hash + ".jarName")
-        val dest = tempDir / hash
+
+        val jarNameFinalPath = assemblyDir / (hash + ".jarName")
+        val jarNameCachePath = assemblyUnzipDir / (hash + ".jarName")
+        val jarCacheDir = assemblyUnzipDir / hash
+        val jarDest = assemblyDir / hash
         // If the jar name path does not exist, or is not for this jar, unzip the jar
-        if (!ao.cacheUnzip || !jarNamePath.exists || IO.read(jarNamePath) != jar.data.getCanonicalPath )
+        if (!jarNameFinalPath.exists || IO.read(jarNameFinalPath) != jar.data.getCanonicalPath )
         {
-          log.debug("Including: %s".format(jarName))
-          IO.delete(dest)
-          dest.mkdir()
-          AssemblyUtils.unzip(jar.data, dest, log)
-          IO.delete(ao.excludedFiles(Seq(dest)))
+          log.info("Including: %s".format(jarName))
+
+          // Copy/Link from cache location if cache exists and is current
+          if (ao.cacheUnzip &&
+            jarNameCachePath.exists && IO.read(jarNameCachePath) == jar.data.getCanonicalPath &&
+            !jarNameFinalPath.exists
+          ) {
+            if (useHardLinks) log.info("Creating hardlinks from unzip cache: %s".format(jarName))
+            else log.info("Copying from unzip cache: %s".format(jarName))
+            AssemblyUtils.copyDirectory(jarCacheDir, jarDest, hardLink = useHardLinks)
+            IO.delete(jarNameFinalPath) // write after merge/shade rules applied
+          // Unzip into cache dir and copy over
+          } else if (ao.cacheUnzip && jarNameFinalPath != jarNameCachePath) {
+            IO.delete(jarCacheDir)
+            jarCacheDir.mkdir()
+
+            log.info("Unzipping into unzip cache: %s".format(jarName))
+            AssemblyUtils.unzip(jar.data, jarCacheDir, log)
+
+            if (useHardLinks) log.info("Creating hardlinks from unzip cache: %s".format(jarName))
+            else log.info("Copying from unzip cache: %s".format(jarName))
+            AssemblyUtils.copyDirectory(jarCacheDir, jarDest, hardLink = useHardLinks)
+          // Don't use cache dir, just unzip to output cache
+          } else {
+            IO.delete(jarDest)
+            jarDest.mkdir()
+            log.info("Unzipping into output cache: %s".format(jarName))
+            AssemblyUtils.unzip(jar.data, jarDest, log)
+          }
+
+          IO.delete(ao.excludedFiles(Seq(jarDest)))
           if (jarRules.nonEmpty) {
-            val mappings = ((dest ** (-DirectoryFilter)).get pair relativeTo(dest)) map {
+            val mappings = ((jarDest ** (-DirectoryFilter)).get pair relativeTo(jarDest)) map {
               case (k, v) => k.toPath -> v
             }
-            Shader.shadeDirectory(dirRules, dest.toPath, mappings, ao.level == Level.Debug)
+            Shader.shadeDirectory(dirRules, jarDest.toPath, mappings, ao.level == Level.Debug)
           }
 
           // Write the jarNamePath at the end to minimise the chance of having a
           // corrupt cache if the user aborts the build midway through
-          IO.write(jarNamePath, jar.data.getCanonicalPath, IO.utf8, false)
+          if (jarNameFinalPath != jarNameCachePath && !jarNameCachePath.exists)
+            IO.write(jarNameCachePath, jar.data.getCanonicalPath, IO.utf8, false)
+
+          IO.write(jarNameFinalPath, jar.data.getCanonicalPath, IO.utf8, false)
+        } else {
+          log.info("Including from output cache: %s".format(jarName))
         }
-        else log.debug("Including from cache: %s".format(jarName))
+        (jarDest, jar.data)
+      }
 
-        (dest, jar.data)
-      })
-
-    log.debug("Calculate mappings...")
+    log.info("Calculate mappings...")
     val base: Vector[File] = dirsFiltered.seq ++ (jarDirs map { _._1 })
-    val excluded = (ao.excludedFiles(base) ++ base).toSet
-    val retval = (dirsFiltered map { d => MappingSet(None, AssemblyUtils.getMappings(d, excluded)) }).seq ++
+    val excluded: Set[File] = (ao.excludedFiles(base) ++ base).toSet
+    val retval: Vector[MappingSet] = (dirsFiltered map { d => MappingSet(None, AssemblyUtils.getMappings(d, excluded)) }).seq ++
                  (jarDirs map { case (d, j) => MappingSet(Some(j), AssemblyUtils.getMappings(d, excluded)) })
-    retval.toVector
+    retval
   }
 
   def assemblyTask(key: TaskKey[File]): Initialize[Task[File]] = Def.task {
-    val t = (test in key).value
+    // Run tests if enabled before assembly task
+    val _ = (test in key).value
+
     val s = (streams in key).value
     Assembly(
-      (assemblyOutputPath in key).value, (assemblyOption in key).value,
-      (packageOptions in key).value, (assembledMappings in key).value,
-      s.cacheDirectory, s.log)
+      (assemblyOutputPath in key).value,
+      (assemblyOption in key).value,
+      (packageOptions in key).value,
+      (assembledMappings in key).value,
+      s.cacheDirectory,
+      s.log
+    )
   }
+
   def assembledMappingsTask(key: TaskKey[File]): Initialize[Task[Seq[MappingSet]]] = Def.task {
     val s = (streams in key).value
     assembleMappings(
-      (fullClasspath in assembly).value, (externalDependencyClasspath in assembly).value,
-      (assemblyOption in key).value, s.log)
+      (fullClasspath in assembly).value,
+      (externalDependencyClasspath in assembly).value,
+      (assemblyOption in key).value,
+      s.log
+    )
   }
 
   def isSystemJunkFile(fileName: String): Boolean =
