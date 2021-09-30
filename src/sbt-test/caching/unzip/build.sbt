@@ -22,7 +22,8 @@ lazy val root = (project in file(".")).
     ),
     assemblyUnzipDirectory := Some(tempUnzipDir),
     assemblyCacheUseHardLinks := true,
-    assembly / logLevel := sbt.Level.Info,
+    logLevel := sbt.Level.Debug,
+    logBuffered := false,
     assembly / assemblyJarName := "foo.jar",
     TaskKey[Unit]("checkunzip") := {
       val opt = (assembly / assemblyOption).value

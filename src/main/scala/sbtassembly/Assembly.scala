@@ -3,13 +3,16 @@ package sbtassembly
 import sbt._
 import Keys._
 import Path.relativeTo
+
 import java.security.MessageDigest
 import java.io.{File, IOException}
 import scala.collection.mutable
 import Def.Initialize
 import PluginCompat._
 import com.eed3si9n.jarjarabrams._
+
 import scala.collection.parallel.immutable.ParVector
+
 
 object Assembly {
   import AssemblyPlugin.autoImport.{ Assembly => _, _ }
@@ -219,7 +222,8 @@ object Assembly {
       classpath: Classpath,
       dependencies: Classpath,
       ao: AssemblyOption,
-      log: Logger
+      log: Logger,
+      state: State
   ): Vector[MappingSet] = {
     val assemblyDir = ao.assemblyDirectory.get
     val assemblyUnzipDir = ao.assemblyUnzipDirectory.getOrElse(assemblyDir)
@@ -263,7 +267,8 @@ object Assembly {
       libsFiltered,
       ao,
       isCacheOnly = false,
-      log
+      log,
+      state
     )
 
     log.info("Calculate mappings...")
@@ -278,7 +283,8 @@ object Assembly {
     classpath: Classpath,
     dependencies: Classpath,
     assemblyOption: AssemblyOption,
-    log: Logger
+    log: Logger,
+    state: State
   ): Boolean = {
     if (!assemblyOption.cacheUnzip) sys.error("AssemblyOption.cacheUnzip must be true")
     if (assemblyOption.assemblyUnzipDirectory.isEmpty) sys.error("AssemblyOption.assemblyUnzipDiretory must be supplied")
@@ -289,7 +295,7 @@ object Assembly {
       assemblyOption = assemblyOption
     )
 
-    processDependencyJars(libsFiltered, assemblyOption, isCacheOnly = true, log)
+    processDependencyJars(libsFiltered, assemblyOption, isCacheOnly = true, log, state)
 
     true
   }
@@ -315,7 +321,8 @@ object Assembly {
       (fullClasspath in assembly).value,
       (externalDependencyClasspath in assembly).value,
       (assemblyOption in key).value,
-      s.log
+      s.log,
+      state.value
     )
   }
 
@@ -324,13 +331,15 @@ object Assembly {
     val ao = (assemblyOption in key).value
     val cp = (fullClasspath in assembly).value
     val deps = (externalDependencyClasspath in assembly).value
+    val currentState = state.value
+    val projectIdMsg: String = getProjectIdMsg(currentState)
 
     if (!ao.cacheUnzip || ao.assemblyUnzipDirectory.isEmpty) {
-      if (!ao.cacheUnzip) s.log.warn("AssemblyOption.cacheUnzip must be true. Skipping unzip task.")
-      if (ao.assemblyUnzipDirectory.isEmpty) s.log.warn("AssemblyOption.assemblyUnzipDirectory must be be supplied. Skipping cache unzip task.")
+      if (!ao.cacheUnzip) s.log.warn(s"AssemblyOption.cacheUnzip must be true. Skipping unzip task for projectID: $projectIdMsg.")
+      if (ao.assemblyUnzipDirectory.isEmpty) s.log.warn(s"AssemblyOption.assemblyUnzipDirectory must be be supplied. Skipping cache unzip task for projectID: $projectIdMsg")
       false
     } else {
-      assemblyCacheDependency(classpath = cp, dependencies = deps, ao, s.log)
+      assemblyCacheDependency(classpath = cp, dependencies = deps, ao, s.log, currentState)
     }
   }
 
@@ -365,17 +374,29 @@ object Assembly {
   def isScalaLibraryFile(scalaLibraries: Vector[String], file: File): Boolean =
     scalaLibraries exists { x => file.getName startsWith x }
 
+  private[sbtassembly] def getProjectIdMsg(state: State): String = {
+    val project = Project.extract(state)
+
+    val projectName = project.get(Keys.projectID).name
+    val currentRefProjectName = project.currentRef.project
+
+    if (projectName != currentRefProjectName) s"$projectName/$currentRefProjectName"
+    else projectName
+  }
+
   private[sbtassembly] def processDependencyJars(
     libsFiltered: Vector[Attributed[File]],
     assemblyOption: AssemblyOption,
     isCacheOnly: Boolean,
-    log: Logger
+    log: Logger,
+    state: State
   ): ParVector[(File, File)] = {
 
     val defaultAssemblyDir = assemblyOption.assemblyDirectory.get
     val assemblyUnzipDir: File = assemblyOption.assemblyUnzipDirectory.getOrElse(defaultAssemblyDir)
     val assemblyDir: Option[File] = if (isCacheOnly) None else Some(defaultAssemblyDir)
     val isSameDir: Boolean = assemblyDir.exists{ _ == assemblyUnzipDir }
+    val projectIdMsg: String = getProjectIdMsg(state)
 
     if (!assemblyUnzipDir.exists) IO.createDirectory(assemblyUnzipDir)
     if (assemblyDir.isDefined && !assemblyDir.get.exists) IO.createDirectory(assemblyDir.get)
@@ -384,11 +405,11 @@ object Assembly {
 
     val useHardLinks: Boolean = assemblyOption.cacheUseHardLinks && !isCacheOnly && {
       if (isSameDir) {
-        log.warn(s"cacheUseHardLinks is enabled, but assemblyUnzipDirectory is the same as assemblyDirectory ($assemblyUnzipDirectory)")
+        log.warn(s"cacheUseHardLinks is enabled for project ($projectIdMsg), but assemblyUnzipDirectory is the same as assemblyDirectory ($assemblyUnzipDirectory)")
         false
       } else {
         val isHardLinkSupported = AssemblyUtils.isHardLinkSupported(sourceDir = assemblyUnzipDir, destDir = assemblyDir.get)
-        if (!isHardLinkSupported) log.warn(s"cacheUseHardLinks is enabled, but file system doesn't support hardlinks between from $assemblyUnzipDir to ${assemblyDir.get}")
+        if (!isHardLinkSupported) log.warn(s"cacheUseHardLinks is enabled for project ($projectIdMsg), but file system doesn't support hardlinks between from $assemblyUnzipDir to ${assemblyDir.get}")
         isHardLinkSupported
       }
     }
@@ -403,64 +424,73 @@ object Assembly {
       val hash = sha1name(jar.data) + "_" + sha1content(jar.data) + "_" + sha1rules(jarRules)
 
       val jarNameFinalPath = assemblyDir.getOrElse(assemblyUnzipDir) / (hash + ".jarName")
+      val lockPath = assemblyDir.getOrElse(assemblyUnzipDir) / (hash + ".lock")
       val jarNameCachePath = assemblyUnzipDir / (hash + ".jarName")
       val jarCacheDir = assemblyUnzipDir / hash
       val jarOutputDir = assemblyDir.getOrElse(assemblyUnzipDir) / hash
-      // If the jar name path does not exist, or is not for this jar, unzip the jar
-      if (!jarNameFinalPath.exists || IO.read(jarNameFinalPath) != jar.data.getCanonicalPath )
-      {
-        log.info("Including: %s".format(jarName))
 
-        // Copy/Link from cache location if cache exists and is current
-        if (assemblyOption.cacheUnzip &&
-          jarNameCachePath.exists && IO.read(jarNameCachePath) == jar.data.getCanonicalPath &&
-          !jarNameFinalPath.exists
-        ) {
-          if (useHardLinks) log.info("Creating hardlinks from unzip cache: %s".format(jarName))
-          else log.info("Copying from unzip cache: %s".format(jarName))
-          AssemblyUtils.copyDirectory(jarCacheDir, jarOutputDir, hardLink = useHardLinks)
-          IO.delete(jarNameFinalPath) // write after merge/shade rules applied
-        // Unzip into cache dir and copy over
-        } else if (assemblyOption.cacheUnzip && jarNameFinalPath != jarNameCachePath) {
-          IO.delete(jarCacheDir)
-          IO.createDirectory(jarCacheDir)
+      state.locked(lockPath) {
+        // If the jar name path does not exist, or is not for this jar, unzip the jar
+        if (!jarNameFinalPath.exists || IO.read(jarNameFinalPath) != jar.data.getCanonicalPath )
+        {
+          log.info("Including: %s, for project: %s".format(jarName, projectIdMsg))
 
-          log.info("Unzipping into unzip cache: %s".format(jarName))
-          AssemblyUtils.unzip(jar.data, jarCacheDir, log)
-
-          if (useHardLinks) log.info("Creating hardlinks from unzip cache: %s".format(jarName))
-          else log.info("Copying from unzip cache: %s".format(jarName))
-          AssemblyUtils.copyDirectory(jarCacheDir, jarOutputDir, hardLink = useHardLinks)
-        // Don't use cache dir, just unzip to output cache
-        } else {
-          IO.delete(jarOutputDir)
-          IO.createDirectory(jarOutputDir)
-          log.info("Unzipping into %s: %s".format(unzippingIntoMessage, jarName))
-          AssemblyUtils.unzip(jar.data, jarOutputDir, log)
-        }
-
-        if (!isCacheOnly) {
-          IO.delete(assemblyOption.excludedFiles(Seq(jarOutputDir)))
-          if (jarRules.nonEmpty) {
-            val mappings = ((jarOutputDir ** (-DirectoryFilter)).get pair relativeTo(jarOutputDir)) map {
-              case (k, v) => k.toPath -> v
+          // Copy/Link from cache location if cache exists and is current
+          if (assemblyOption.cacheUnzip &&
+            jarNameCachePath.exists && IO.read(jarNameCachePath) == jar.data.getCanonicalPath &&
+            !jarNameFinalPath.exists
+          ) {
+            if (useHardLinks) {
+              log.info("Creating hardlinks of %s from unzip cache: %s, to: %s, for project: %s".format(jarName, jarCacheDir, jarOutputDir, projectIdMsg))
+              AssemblyUtils.copyDirectory(jarCacheDir, jarOutputDir, hardLink = true)
+            } else {
+              log.info("Copying %s from unzip cache: %s, to: %s, for project: %s".format(jarName, jarCacheDir, jarOutputDir, projectIdMsg))
+              AssemblyUtils.copyDirectory(jarCacheDir, jarOutputDir, hardLink = false)
             }
-            val dirRules: Seq[ShadeRule] = assemblyOption.shadeRules.filter(_.isApplicableToCompiling)
-            Shader.shadeDirectory(dirRules, jarOutputDir.toPath, mappings, assemblyOption.level == Level.Debug)
+            AssemblyUtils.copyDirectory(jarCacheDir, jarOutputDir, hardLink = useHardLinks)
+            IO.delete(jarNameFinalPath) // write after merge/shade rules applied
+            // Unzip into cache dir and copy over
+          } else if (assemblyOption.cacheUnzip && jarNameFinalPath != jarNameCachePath) {
+            IO.delete(jarCacheDir)
+            IO.createDirectory(jarCacheDir)
+
+            log.info("Unzipping %s into unzip cache: %s for project: %s".format(jarName, jarCacheDir, projectIdMsg))
+            AssemblyUtils.unzip(jar.data, jarCacheDir, log)
+
+            if (useHardLinks) log.info("Creating hardlinks of %s from unzip cache: %s, to: %s, for project: %s".format(jarName, jarCacheDir, jarOutputDir, projectIdMsg))
+            else log.info("Copying %s from unzip cache: %s, to: %s, for project: %s".format(jarName, jarCacheDir, jarOutputDir, projectIdMsg))
+            AssemblyUtils.copyDirectory(jarCacheDir, jarOutputDir, hardLink = useHardLinks)
+            // Don't use cache dir, just unzip to output cache
+          } else {
+            IO.delete(jarOutputDir)
+            IO.createDirectory(jarOutputDir)
+            log.info("Unzipping %s into %s: %s, for project: %s".format(jarName, unzippingIntoMessage, jarOutputDir, projectIdMsg))
+            AssemblyUtils.unzip(jar.data, jarOutputDir, log)
           }
+
+          if (!isCacheOnly) {
+            IO.delete(assemblyOption.excludedFiles(Seq(jarOutputDir)))
+            if (jarRules.nonEmpty) {
+              val mappings = ((jarOutputDir ** (-DirectoryFilter)).get pair relativeTo(jarOutputDir)) map {
+                case (k, v) => k.toPath -> v
+              }
+              val dirRules: Seq[ShadeRule] = assemblyOption.shadeRules.filter(_.isApplicableToCompiling)
+              Shader.shadeDirectory(dirRules, jarOutputDir.toPath, mappings, assemblyOption.level == Level.Debug)
+            }
+          }
+
+          // Write the jarNamePath at the end to minimise the chance of having a
+          // corrupt cache if the user aborts the build midway through
+          if (jarNameFinalPath != jarNameCachePath && !jarNameCachePath.exists)
+            IO.write(jarNameCachePath, jar.data.getCanonicalPath, IO.utf8, false)
+
+          IO.write(jarNameFinalPath, jar.data.getCanonicalPath, IO.utf8, false)
+        } else {
+          if (isCacheOnly) log.info("Unzip cache of %s is up to date, for project: %s".format(jarName, projectIdMsg))
+          else log.info("Including %s from output cache: %s, for project: %s".format(jarName, jarOutputDir, projectIdMsg))
         }
-
-        // Write the jarNamePath at the end to minimise the chance of having a
-        // corrupt cache if the user aborts the build midway through
-        if (jarNameFinalPath != jarNameCachePath && !jarNameCachePath.exists)
-          IO.write(jarNameCachePath, jar.data.getCanonicalPath, IO.utf8, false)
-
-        IO.write(jarNameFinalPath, jar.data.getCanonicalPath, IO.utf8, false)
-      } else {
-        if (isCacheOnly) log.info("Unzip cache is up to date for: %s".format(jarName))
-        else log.info("Including from output cache: %s".format(jarName))
+        (jarOutputDir, jar.data)
       }
-      (jarOutputDir, jar.data)
     }
   }
 
