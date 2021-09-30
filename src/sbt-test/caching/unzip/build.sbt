@@ -20,16 +20,12 @@ lazy val root = (project in file(".")).
         .inLibrary("commons-io" % "commons-io" % "2.4")
         .inProject
     ),
-    assembly / assemblyOption ~= {
-      _.withCacheOutput(true)
-        .withCacheUnzip(true)
-        .withAssemblyUnzipDirectory(tempUnzipDir)
-        .withUseHardLinks(true)
-    },
-    logLevel in assembly := sbt.Level.Info,
+    assemblyUnzipDirectory := Some(tempUnzipDir),
+    assemblyCacheUseHardLinks := true,
+    assembly / logLevel := sbt.Level.Info,
     assembly / assemblyJarName := "foo.jar",
     TaskKey[Unit]("checkunzip") := {
-      val opt = (assemblyOption in assembly).value
+      val opt = (assembly / assemblyOption).value
       val assemblyDir = opt.assemblyDirectory.get
       val assemblyUnzipDir = opt.assemblyUnzipDirectory.get
       val preShadePath = "org.apache.commons.io".replace('.', java.io.File.separatorChar)
@@ -55,7 +51,7 @@ lazy val root = (project in file(".")).
       }
       ()
     },
-    TaskKey[Unit]("cleanzip") := {
+    TaskKey[Unit]("cleanunzip") := {
       IO.delete(tempUnzipDir)
     }
   )

@@ -9,7 +9,9 @@ trait AssemblyKeys {
   lazy val assembleArtifact           = settingKey[Boolean]("Enables (true) or disables (false) assembling an artifact")
   lazy val assemblyOption             = taskKey[AssemblyOption]("Configuration for making a deployable über JAR")
   lazy val assembledMappings          = taskKey[Seq[MappingSet]]("Keeps track of jar origins for each source")
+  lazy val assemblyCacheDependency    = taskKey[Boolean]("Caches the unzipped products of the dependency JAR files.  Requires assemblyCacheUnzip (true) and AssemblyOption.assemblyUnzipCacheDir to be provided.")
 
+  lazy val assemblyUnzipDirectory     = settingKey[Option[File]]("Specify a directory to unzip the products of dependency JAR files (e.g. assemblyUnzipDirectory := Some(localCacheDirectory.value / \"sbt-assembly\" / \"dependencies\").  Default None (uses default assembly directory).")
   lazy val assemblyPackageScala       = taskKey[File]("Produces the Scala artifact")
   lazy val assemblyPackageDependency  = taskKey[File]("Produces the dependency artifact")
   lazy val assemblyJarName            = taskKey[String]("name of the über jar")
@@ -22,6 +24,7 @@ trait AssemblyKeys {
   lazy val assemblyMaxHashLength      = settingKey[Int]("Length of SHA-1 fingerprint used for the assembly file name")
   lazy val assemblyCacheUnzip         = settingKey[Boolean]("Enables (true) or disables (false) cacheing the unzipped products of the dependency JAR files")
   lazy val assemblyCacheOutput        = settingKey[Boolean]("Enables (true) or disables (false) cacheing the output if the content has not changed")
+  lazy val assemblyCacheUseHardLinks  = settingKey[Boolean]("Experimental. Enables (true) or disables (false) using Files.createLink from the unzipped dependency cache to the assembly directory.  Requires both paths to be on the same physical filesystem.  Default false.")
   lazy val assemblyPrependShellScript = settingKey[Option[Seq[String]]]("A launch script to prepend to the über JAR")
 }
 

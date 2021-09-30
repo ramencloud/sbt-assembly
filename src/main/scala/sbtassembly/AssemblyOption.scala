@@ -19,7 +19,7 @@ final class AssemblyOption private (
   val mergeStrategy: String => MergeStrategy,
   val cacheOutput: Boolean,
   val cacheUnzip: Boolean,
-  val useHardLinks: Boolean, // Experimental, requires assemblyDirectory and assemblyUnzipDirectory to be on the same physical filesystem volume.
+  val cacheUseHardLinks: Boolean, // Experimental, requires assemblyDirectory and assemblyUnzipDirectory to be on the same physical filesystem volume.
   val appendContentHash: Boolean,
   val prependShellScript: Option[Seq[String]],
   val maxHashLength: Option[Int],
@@ -35,15 +35,15 @@ final class AssemblyOption private (
   })
 
   override def hashCode: Int = {
-    37 * (37 * (37 * (37 * (37 * (37 * (37 * (37 * (37 * (37 * (37 * (37 * (37 * (37 * (37 * (37 * (37 * (37 * (17 + "sbtassembly.AssemblyOption".##) + assemblyDirectory.##) + assemblyUnzipDirectory.##) + includeBin.##) + includeScala.##) + includeDependency.##) + excludedJars.##) + excludedFiles.##) + mergeStrategy.##) + cacheOutput.##) + cacheUnzip.##) + useHardLinks.##) + appendContentHash.##) + prependShellScript.##) + maxHashLength.##) + shadeRules.##) + scalaVersion.##) + level.##)
+    37 * (37 * (37 * (37 * (37 * (37 * (37 * (37 * (37 * (37 * (37 * (37 * (37 * (37 * (37 * (37 * (37 * (37 * (17 + "sbtassembly.AssemblyOption".##) + assemblyDirectory.##) + assemblyUnzipDirectory.##) + includeBin.##) + includeScala.##) + includeDependency.##) + excludedJars.##) + excludedFiles.##) + mergeStrategy.##) + cacheOutput.##) + cacheUnzip.##) + cacheUseHardLinks.##) + appendContentHash.##) + prependShellScript.##) + maxHashLength.##) + shadeRules.##) + scalaVersion.##) + level.##)
   }
 
   override def toString: String = {
-    "AssemblyOption(" + assemblyDirectory + ", " + assemblyUnzipDirectory + ", " + includeBin + ", " + includeScala + ", " + includeDependency + ", " + excludedJars + ", " + excludedFiles + ", " + mergeStrategy + ", " + cacheOutput + ", " + cacheUnzip + ", " + useHardLinks + ", " + appendContentHash + ", " + prependShellScript + ", " + maxHashLength + ", " + shadeRules + ", " + scalaVersion + ", " + level + ")"
+    "AssemblyOption(" + assemblyDirectory + ", " + assemblyUnzipDirectory + ", " + includeBin + ", " + includeScala + ", " + includeDependency + ", " + excludedJars + ", " + excludedFiles + ", " + mergeStrategy + ", " + cacheOutput + ", " + cacheUnzip + ", " + cacheUseHardLinks + ", " + appendContentHash + ", " + prependShellScript + ", " + maxHashLength + ", " + shadeRules + ", " + scalaVersion + ", " + level + ")"
   }
 
   @deprecated("copy method is deprecated; use withIncludeBin(...) etc", "1.0.0")
-  def copy(assemblyDirectory: Option[java.io.File] = assemblyDirectory, assemblyUnzipDirectory: Option[java.io.File] = assemblyUnzipDirectory, includeBin: Boolean = includeBin, includeScala: Boolean = includeScala, includeDependency: Boolean = includeDependency, excludedJars: sbt.Keys.Classpath = excludedJars, excludedFiles: Seq[java.io.File] => Seq[java.io.File] = excludedFiles, mergeStrategy: String => MergeStrategy = mergeStrategy, cacheOutput: Boolean = cacheOutput, cacheUnzip: Boolean = cacheUnzip, useHardLinks: Boolean = useHardLinks, appendContentHash: Boolean = appendContentHash, prependShellScript: Option[Seq[String]] = prependShellScript, maxHashLength: Option[Int] = maxHashLength, shadeRules: Seq[com.eed3si9n.jarjarabrams.ShadeRule] = shadeRules, scalaVersion: String = scalaVersion, level: sbt.Level.Value = level): AssemblyOption = {
+  def copy(assemblyDirectory: Option[java.io.File] = assemblyDirectory, assemblyUnzipDirectory: Option[java.io.File] = assemblyUnzipDirectory, includeBin: Boolean = includeBin, includeScala: Boolean = includeScala, includeDependency: Boolean = includeDependency, excludedJars: sbt.Keys.Classpath = excludedJars, excludedFiles: Seq[java.io.File] => Seq[java.io.File] = excludedFiles, mergeStrategy: String => MergeStrategy = mergeStrategy, cacheOutput: Boolean = cacheOutput, cacheUnzip: Boolean = cacheUnzip, cacheUseHardLinks: Boolean = cacheUseHardLinks, appendContentHash: Boolean = appendContentHash, prependShellScript: Option[Seq[String]] = prependShellScript, maxHashLength: Option[Int] = maxHashLength, shadeRules: Seq[com.eed3si9n.jarjarabrams.ShadeRule] = shadeRules, scalaVersion: String = scalaVersion, level: sbt.Level.Value = level): AssemblyOption = {
     cp(assemblyDirectory = assemblyDirectory,
       assemblyUnzipDirectory = assemblyUnzipDirectory,
       includeBin = includeBin,
@@ -54,7 +54,7 @@ final class AssemblyOption private (
       mergeStrategy = mergeStrategy,
       cacheOutput = cacheOutput,
       cacheUnzip = cacheUnzip,
-      useHardLinks = useHardLinks,
+      cacheUseHardLinks = cacheUseHardLinks,
       appendContentHash = appendContentHash,
       prependShellScript = prependShellScript,
       maxHashLength = maxHashLength,
@@ -64,8 +64,8 @@ final class AssemblyOption private (
     )
   }
 
-  private def cp(assemblyDirectory: Option[java.io.File] = assemblyDirectory, assemblyUnzipDirectory: Option[java.io.File] = assemblyUnzipDirectory, includeBin: Boolean = includeBin, includeScala: Boolean = includeScala, includeDependency: Boolean = includeDependency, excludedJars: sbt.Keys.Classpath = excludedJars, excludedFiles: Seq[java.io.File] => Seq[java.io.File] = excludedFiles, mergeStrategy: String => MergeStrategy = mergeStrategy, cacheOutput: Boolean = cacheOutput, cacheUnzip: Boolean = cacheUnzip, useHardLinks: Boolean = useHardLinks, appendContentHash: Boolean = appendContentHash, prependShellScript: Option[Seq[String]] = prependShellScript, maxHashLength: Option[Int] = maxHashLength, shadeRules: Seq[com.eed3si9n.jarjarabrams.ShadeRule] = shadeRules, scalaVersion: String = scalaVersion, level: sbt.Level.Value = level): AssemblyOption = {
-    new AssemblyOption(assemblyDirectory, assemblyUnzipDirectory, includeBin, includeScala, includeDependency, excludedJars, excludedFiles, mergeStrategy, cacheOutput, cacheUnzip, useHardLinks, appendContentHash, prependShellScript, maxHashLength, shadeRules, scalaVersion, level)
+  private def cp(assemblyDirectory: Option[java.io.File] = assemblyDirectory, assemblyUnzipDirectory: Option[java.io.File] = assemblyUnzipDirectory, includeBin: Boolean = includeBin, includeScala: Boolean = includeScala, includeDependency: Boolean = includeDependency, excludedJars: sbt.Keys.Classpath = excludedJars, excludedFiles: Seq[java.io.File] => Seq[java.io.File] = excludedFiles, mergeStrategy: String => MergeStrategy = mergeStrategy, cacheOutput: Boolean = cacheOutput, cacheUnzip: Boolean = cacheUnzip, cacheUseHardLinks: Boolean = cacheUseHardLinks, appendContentHash: Boolean = appendContentHash, prependShellScript: Option[Seq[String]] = prependShellScript, maxHashLength: Option[Int] = maxHashLength, shadeRules: Seq[com.eed3si9n.jarjarabrams.ShadeRule] = shadeRules, scalaVersion: String = scalaVersion, level: sbt.Level.Value = level): AssemblyOption = {
+    new AssemblyOption(assemblyDirectory, assemblyUnzipDirectory, includeBin, includeScala, includeDependency, excludedJars, excludedFiles, mergeStrategy, cacheOutput, cacheUnzip, cacheUseHardLinks, appendContentHash, prependShellScript, maxHashLength, shadeRules, scalaVersion, level)
   }
 
   def withAssemblyDirectory(assemblyDirectory: Option[java.io.File]): AssemblyOption = {
@@ -75,7 +75,7 @@ final class AssemblyOption private (
     cp(assemblyDirectory = Option(assemblyDirectory))
   }
   def withAssemblyUnzipDirectory(assemblyUnzipDirectory: Option[java.io.File]): AssemblyOption = {
-    cp(assemblyUnzipDirectory = assemblyDirectory)
+    cp(assemblyUnzipDirectory = assemblyUnzipDirectory)
   }
   def withAssemblyUnzipDirectory(assemblyUnzipDirectory: java.io.File): AssemblyOption = {
     cp(assemblyUnzipDirectory = Option(assemblyUnzipDirectory))
@@ -104,8 +104,8 @@ final class AssemblyOption private (
   def withCacheUnzip(cacheUnzip: Boolean): AssemblyOption = {
     cp(cacheUnzip = cacheUnzip)
   }
-  def withUseHardLinks(useHardLinks: Boolean): AssemblyOption = {
-    cp(useHardLinks = useHardLinks)
+  def withCacheUseHardLinks(cacheUseHardLinks: Boolean): AssemblyOption = {
+    cp(cacheUseHardLinks = cacheUseHardLinks)
   }
   def withAppendContentHash(appendContentHash: Boolean): AssemblyOption = {
     cp(appendContentHash = appendContentHash)
@@ -139,6 +139,6 @@ object AssemblyOption {
   def apply(assemblyDirectory: Option[java.io.File], includeBin: Boolean, includeScala: Boolean, includeDependency: Boolean, excludedJars: sbt.Keys.Classpath, excludedFiles: Seq[java.io.File] => Seq[java.io.File], mergeStrategy: String => MergeStrategy, cacheOutput: Boolean, cacheUnzip: Boolean, appendContentHash: Boolean, prependShellScript: Option[Seq[String]], maxHashLength: Option[Int], shadeRules: Seq[com.eed3si9n.jarjarabrams.ShadeRule], scalaVersion: String, level: sbt.Level.Value): AssemblyOption = new AssemblyOption(assemblyDirectory, None,includeBin, includeScala, includeDependency, excludedJars, excludedFiles, mergeStrategy, cacheOutput, cacheUnzip, false, appendContentHash, prependShellScript, maxHashLength, shadeRules, scalaVersion, level)
   def apply(assemblyDirectory: java.io.File, includeBin: Boolean, includeScala: Boolean, includeDependency: Boolean, excludedJars: sbt.Keys.Classpath, excludedFiles: Seq[java.io.File] => Seq[java.io.File], mergeStrategy: String => MergeStrategy, cacheOutput: Boolean, cacheUnzip: Boolean, appendContentHash: Boolean, prependShellScript: Seq[String], maxHashLength: Int, shadeRules: Seq[com.eed3si9n.jarjarabrams.ShadeRule], scalaVersion: String, level: sbt.Level.Value): AssemblyOption = new AssemblyOption(Option(assemblyDirectory), None, includeBin, includeScala, includeDependency, excludedJars, excludedFiles, mergeStrategy, cacheOutput, cacheUnzip, false, appendContentHash, Option(prependShellScript), Option(maxHashLength), shadeRules, scalaVersion, level)
   // Current API
-  def apply(assemblyDirectory: Option[java.io.File], assemblyUnzipDirectory: Option[java.io.File], includeBin: Boolean, includeScala: Boolean, includeDependency: Boolean, excludedJars: sbt.Keys.Classpath, excludedFiles: Seq[java.io.File] => Seq[java.io.File], mergeStrategy: String => MergeStrategy, cacheOutput: Boolean, cacheUnzip: Boolean, useHardLinks: Boolean, appendContentHash: Boolean, prependShellScript: Option[Seq[String]], maxHashLength: Option[Int], shadeRules: Seq[com.eed3si9n.jarjarabrams.ShadeRule], scalaVersion: String, level: sbt.Level.Value): AssemblyOption = new AssemblyOption(assemblyDirectory, None, includeBin, includeScala, includeDependency, excludedJars, excludedFiles, mergeStrategy, cacheOutput, cacheUnzip, useHardLinks, appendContentHash, prependShellScript, maxHashLength, shadeRules, scalaVersion, level)
-  def apply(assemblyDirectory: java.io.File, assemblyUnzipDirectory: java.io.File, includeBin: Boolean, includeScala: Boolean, includeDependency: Boolean, excludedJars: sbt.Keys.Classpath, excludedFiles: Seq[java.io.File] => Seq[java.io.File], mergeStrategy: String => MergeStrategy, cacheOutput: Boolean, cacheUnzip: Boolean, useHardLinks: Boolean, appendContentHash: Boolean, prependShellScript: Seq[String], maxHashLength: Int, shadeRules: Seq[com.eed3si9n.jarjarabrams.ShadeRule], scalaVersion: String, level: sbt.Level.Value): AssemblyOption = new AssemblyOption(Option(assemblyDirectory), Option(assemblyUnzipDirectory), includeBin, includeScala, includeDependency, excludedJars, excludedFiles, mergeStrategy, cacheOutput, cacheUnzip, useHardLinks, appendContentHash, Option(prependShellScript), Option(maxHashLength), shadeRules, scalaVersion, level)
+  def apply(assemblyDirectory: Option[java.io.File], assemblyUnzipDirectory: Option[java.io.File], includeBin: Boolean, includeScala: Boolean, includeDependency: Boolean, excludedJars: sbt.Keys.Classpath, excludedFiles: Seq[java.io.File] => Seq[java.io.File], mergeStrategy: String => MergeStrategy, cacheOutput: Boolean, cacheUnzip: Boolean, cacheUseHardLinks: Boolean, appendContentHash: Boolean, prependShellScript: Option[Seq[String]], maxHashLength: Option[Int], shadeRules: Seq[com.eed3si9n.jarjarabrams.ShadeRule], scalaVersion: String, level: sbt.Level.Value): AssemblyOption = new AssemblyOption(assemblyDirectory, assemblyUnzipDirectory, includeBin, includeScala, includeDependency, excludedJars, excludedFiles, mergeStrategy, cacheOutput, cacheUnzip, cacheUseHardLinks, appendContentHash, prependShellScript, maxHashLength, shadeRules, scalaVersion, level)
+  def apply(assemblyDirectory: java.io.File, assemblyUnzipDirectory: java.io.File, includeBin: Boolean, includeScala: Boolean, includeDependency: Boolean, excludedJars: sbt.Keys.Classpath, excludedFiles: Seq[java.io.File] => Seq[java.io.File], mergeStrategy: String => MergeStrategy, cacheOutput: Boolean, cacheUnzip: Boolean, cacheUseHardLinks: Boolean, appendContentHash: Boolean, prependShellScript: Seq[String], maxHashLength: Int, shadeRules: Seq[com.eed3si9n.jarjarabrams.ShadeRule], scalaVersion: String, level: sbt.Level.Value): AssemblyOption = new AssemblyOption(Option(assemblyDirectory), Option(assemblyUnzipDirectory), includeBin, includeScala, includeDependency, excludedJars, excludedFiles, mergeStrategy, cacheOutput, cacheUnzip, cacheUseHardLinks, appendContentHash, Option(prependShellScript), Option(maxHashLength), shadeRules, scalaVersion, level)
 }
