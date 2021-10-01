@@ -1,4 +1,4 @@
-ThisBuild / version := "1.2.0-SNAPSHOT"
+ThisBuild / version := "1.2.0-DOTDATA"
 ThisBuild / organization := "com.eed3si9n"
 
 def scala212 = "2.12.8"
