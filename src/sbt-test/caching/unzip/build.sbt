@@ -22,7 +22,7 @@ lazy val root = (project in file(".")).
     ),
     assemblyUnzipDirectory := Some(tempUnzipDir),
     assemblyCacheUseHardLinks := true,
-    logLevel := sbt.Level.Debug,
+    logLevel := sbt.Level.Info,
     logBuffered := false,
     assembly / assemblyJarName := "foo.jar",
     TaskKey[Unit]("checkunzip") := {

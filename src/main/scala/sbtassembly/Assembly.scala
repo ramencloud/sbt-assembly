@@ -287,7 +287,7 @@ object Assembly {
     state: State
   ): Boolean = {
     if (!assemblyOption.cacheUnzip) sys.error("AssemblyOption.cacheUnzip must be true")
-    if (assemblyOption.assemblyUnzipDirectory.isEmpty) sys.error("AssemblyOption.assemblyUnzipDiretory must be supplied")
+    if (assemblyOption.assemblyUnzipDirectory.isEmpty) sys.error("AssemblyOption.assemblyUnzipDirectory must be supplied")
 
     val (libsFiltered: Vector[Attributed[File]], _) = getFilteredLibsAndDirs(
       classpath = classpath,
@@ -414,15 +414,22 @@ object Assembly {
       }
     }
 
-    for(jar <- libsFiltered.par) yield {
-      val jarName = jar.data.asFile.getName
-      val jarRules = assemblyOption.shadeRules
-        .filter(r => r.isApplicableToAll ||
-          jar.metadata.get(moduleID.key)
-            .map(m => ModuleCoordinate(m.organization, m.name, m.revision))
-            .exists(r.isApplicableTo))
-      val hash = sha1name(jar.data) + "_" + sha1content(jar.data) + "_" + sha1rules(jarRules)
+    // Ensure we are not processing the same File twice
+    val jarToAttributedFile: Map[File, Vector[Attributed[File]]] = libsFiltered.groupBy(_.data.getCanonicalFile)
 
+    for(jar: File <- jarToAttributedFile.keys.toVector.par) yield {
+      val jarName = jar.asFile.getName
+      val jarRules = assemblyOption.shadeRules
+        .filter { r =>
+          r.isApplicableToAll ||
+            jarToAttributedFile.getOrElse(jar, Vector.empty)
+              .flatMap(_.metadata.get(moduleID.key))
+              .map(m => ModuleCoordinate(m.organization, m.name, m.revision))
+              .exists(r.isApplicableTo)
+        }
+      val hash = sha1name(jar) + "_" + sha1content(jar) + "_" + sha1rules(jarRules)
+
+      // TODO: Canonical path might be problematic if mount points inside docker are different
       val jarNameFinalPath = assemblyDir.getOrElse(assemblyUnzipDir) / (hash + ".jarName")
       val lockPath = assemblyDir.getOrElse(assemblyUnzipDir) / (hash + ".lock")
       val jarNameCachePath = assemblyUnzipDir / (hash + ".jarName")
@@ -431,13 +438,13 @@ object Assembly {
 
       state.locked(lockPath) {
         // If the jar name path does not exist, or is not for this jar, unzip the jar
-        if (!jarNameFinalPath.exists || IO.read(jarNameFinalPath) != jar.data.getCanonicalPath )
+        if (!jarNameFinalPath.exists || IO.read(jarNameFinalPath) != jar.getCanonicalPath )
         {
           log.info("Including: %s, for project: %s".format(jarName, projectIdMsg))
 
           // Copy/Link from cache location if cache exists and is current
           if (assemblyOption.cacheUnzip &&
-            jarNameCachePath.exists && IO.read(jarNameCachePath) == jar.data.getCanonicalPath &&
+            jarNameCachePath.exists && IO.read(jarNameCachePath) == jar.getCanonicalPath &&
             !jarNameFinalPath.exists
           ) {
             if (useHardLinks) {
@@ -455,7 +462,7 @@ object Assembly {
             IO.createDirectory(jarCacheDir)
 
             log.info("Unzipping %s into unzip cache: %s for project: %s".format(jarName, jarCacheDir, projectIdMsg))
-            AssemblyUtils.unzip(jar.data, jarCacheDir, log)
+            AssemblyUtils.unzip(jar, jarCacheDir, log)
 
             if (useHardLinks) log.info("Creating hardlinks of %s from unzip cache: %s, to: %s, for project: %s".format(jarName, jarCacheDir, jarOutputDir, projectIdMsg))
             else log.info("Copying %s from unzip cache: %s, to: %s, for project: %s".format(jarName, jarCacheDir, jarOutputDir, projectIdMsg))
@@ -465,7 +472,7 @@ object Assembly {
             IO.delete(jarOutputDir)
             IO.createDirectory(jarOutputDir)
             log.info("Unzipping %s into %s: %s, for project: %s".format(jarName, unzippingIntoMessage, jarOutputDir, projectIdMsg))
-            AssemblyUtils.unzip(jar.data, jarOutputDir, log)
+            AssemblyUtils.unzip(jar, jarOutputDir, log)
           }
 
           if (!isCacheOnly) {
@@ -482,14 +489,14 @@ object Assembly {
           // Write the jarNamePath at the end to minimise the chance of having a
           // corrupt cache if the user aborts the build midway through
           if (jarNameFinalPath != jarNameCachePath && !jarNameCachePath.exists)
-            IO.write(jarNameCachePath, jar.data.getCanonicalPath, IO.utf8, false)
+            IO.write(jarNameCachePath, jar.getCanonicalPath, IO.utf8, false)
 
-          IO.write(jarNameFinalPath, jar.data.getCanonicalPath, IO.utf8, false)
+          IO.write(jarNameFinalPath, jar.getCanonicalPath, IO.utf8, false)
         } else {
           if (isCacheOnly) log.info("Unzip cache of %s is up to date, for project: %s".format(jarName, projectIdMsg))
           else log.info("Including %s from output cache: %s, for project: %s".format(jarName, jarOutputDir, projectIdMsg))
         }
-        (jarOutputDir, jar.data)
+        (jarOutputDir, jar)
       }
     }
   }
