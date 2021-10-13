@@ -6,11 +6,12 @@ import Path.relativeTo
 
 import java.security.MessageDigest
 import java.io.{File, IOException}
-import scala.collection.mutable
 import Def.Initialize
 import PluginCompat._
 import com.eed3si9n.jarjarabrams._
 
+import scala.collection.immutable.ListMap
+import scala.collection.mutable
 import scala.collection.parallel.immutable.ParVector
 
 
@@ -414,8 +415,12 @@ object Assembly {
       }
     }
 
-    // Ensure we are not processing the same File twice
-    val jarToAttributedFile: Map[File, Vector[Attributed[File]]] = libsFiltered.groupBy(_.data.getCanonicalFile)
+    // Ensure we are not processing the same File twice, retain original ordering
+    val jarToAttributedFile: ListMap[File, Vector[Attributed[File]]] =
+      libsFiltered
+        .foldLeft(ListMap.empty[File, Vector[Attributed[File]]]) {
+          case (lm, f) => lm.updated(f.data, f +: lm.getOrElse(f.data, Vector.empty))
+        }
 
     for(jar: File <- jarToAttributedFile.keys.toVector.par) yield {
       val jarName = jar.asFile.getName
