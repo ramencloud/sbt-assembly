@@ -228,8 +228,21 @@ object Assembly {
   ): Vector[MappingSet] = {
     val assemblyDir = ao.assemblyDirectory.get
     val assemblyUnzipDir = ao.assemblyUnzipDirectory.getOrElse(assemblyDir)
+    val projectIdMsg: String = getProjectIdMsg(state)
 
-    if (!ao.cacheUnzip) ao.assemblyUnzipDirectory.foreach{ IO.delete }
+    if (!ao.cacheOutput && assemblyDir.exists) {
+      log.info(s"AssemblyOption.cacheOutput set to false, deleting assemblyDirectory: $assemblyDir for project: $projectIdMsg")
+      IO.delete(assemblyDir)
+    }
+
+    for {
+      unzipDir <- ao.assemblyUnzipDirectory
+      if !ao.cacheUnzip
+      if unzipDir.exists
+    } {
+      log.info(s"AssemblyOption.cacheUnzip set to false, deleting assemblyUnzipDirectory: $unzipDir for project: $projectIdMsg")
+      IO.delete(unzipDir)
+    }
 
     if (!assemblyDir.exists) IO.createDirectory(assemblyDir)
     if (!assemblyUnzipDir.exists) IO.createDirectory(assemblyUnzipDir)
@@ -391,7 +404,7 @@ object Assembly {
     isCacheOnly: Boolean,
     log: Logger,
     state: State
-  ): ParVector[(File, File)] = {
+  ): ParVector[(File, File)] = synchronized {
 
     val defaultAssemblyDir = assemblyOption.assemblyDirectory.get
     val assemblyUnzipDir: File = assemblyOption.assemblyUnzipDirectory.getOrElse(defaultAssemblyDir)
@@ -467,10 +480,19 @@ object Assembly {
           // Unzip into cache dir and copy over
         } else if (assemblyOption.cacheUnzip && jarNameFinalPath != jarNameCachePath) {
           IO.delete(jarCacheDir)
+          IO.delete(jarOutputDir)
+
           IO.createDirectory(jarCacheDir)
+          IO.createDirectory(jarOutputDir)
 
           log.info("Unzipping %s into unzip cache: %s for project: %s".format(jarName, jarCacheDir, projectIdMsg))
-          AssemblyUtils.unzip(jar, jarCacheDir, log)
+          val files = AssemblyUtils.unzip(jar, jarCacheDir, log)
+
+          // TODO: This is kind of a hack, but doing it seems to prevent a docker file system issue preventing
+          //       FileNotFound exception after unzipping
+          files.foreach { f =>
+            assert(f.exists(), s"File $f not found after unzipping $jar into $jarCacheDir!")
+          }
 
           if (useHardLinks) log.info("Creating hardlinks of %s from unzip cache: %s, to: %s, for project: %s".format(jarName, jarCacheDir, jarOutputDir, projectIdMsg))
           else log.info("Copying %s from unzip cache: %s, to: %s, for project: %s".format(jarName, jarCacheDir, jarOutputDir, projectIdMsg))

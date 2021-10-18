@@ -171,9 +171,9 @@ private[sbtassembly] object AssemblyUtils {
     hardLink: Boolean
   )(from: File, to: File): File = {
     if (overwrite || !to.exists || IO.getModifiedTimeOrZero(from) > IO.getModifiedTimeOrZero(to)) {
-      if (from.isDirectory)
+      if (from.isDirectory) {
         IO.createDirectory(to)
-      else {
+      } else {
         IO.createDirectory(to.getParentFile)
         copyFile(from, to, preserveLastModified, preserveExecutable, hardLink)
       }

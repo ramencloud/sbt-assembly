@@ -4,7 +4,7 @@ lazy val root = (project in file(".")).
     scalaVersion := "2.11.12",
     libraryDependencies += "org.scalatest" %% "scalatest" % "3.0.1" % "test",
     libraryDependencies += "ch.qos.logback" % "logback-classic" % "0.9.29" % "runtime",
-    logLevel := sbt.Level.Debug,
+    logLevel := sbt.Level.Info,
     logBuffered := false,
     assembly / assemblyOption ~= {
       _.withCacheOutput(true)
