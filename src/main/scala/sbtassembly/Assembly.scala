@@ -404,129 +404,134 @@ object Assembly {
     isCacheOnly: Boolean,
     log: Logger,
     state: State
-  ): ParVector[(File, File)] = synchronized {
-
+  ): ParVector[(File, File)] = {
     val defaultAssemblyDir = assemblyOption.assemblyDirectory.get
     val assemblyUnzipDir: File = assemblyOption.assemblyUnzipDirectory.getOrElse(defaultAssemblyDir)
     val assemblyDir: Option[File] = if (isCacheOnly) None else Some(defaultAssemblyDir)
     val isSameDir: Boolean = assemblyDir.exists{ _ == assemblyUnzipDir }
-    val projectIdMsg: String = getProjectIdMsg(state)
 
     if (!assemblyUnzipDir.exists) IO.createDirectory(assemblyUnzipDir)
     if (assemblyDir.isDefined && !assemblyDir.get.exists) IO.createDirectory(assemblyDir.get)
 
-    val unzippingIntoMessage: String = if (isCacheOnly && !isSameDir) "unzip cache" else "output cache"
+    state.locked(assemblyUnzipDir / "sbt-assembly.lock") {
 
-    val useHardLinks: Boolean = assemblyOption.cacheUseHardLinks && !isCacheOnly && {
-      if (isSameDir) {
-        log.warn(s"cacheUseHardLinks is enabled for project ($projectIdMsg), but assemblyUnzipDirectory is the same as assemblyDirectory ($assemblyUnzipDirectory)")
-        false
-      } else {
-        val isHardLinkSupported = AssemblyUtils.isHardLinkSupported(sourceDir = assemblyUnzipDir, destDir = assemblyDir.get)
-        if (!isHardLinkSupported) log.warn(s"cacheUseHardLinks is enabled for project ($projectIdMsg), but file system doesn't support hardlinks between from $assemblyUnzipDir to ${assemblyDir.get}")
-        isHardLinkSupported
-      }
-    }
+      val projectIdMsg: String = getProjectIdMsg(state)
 
-    // Ensure we are not processing the same File twice, retain original ordering
-    val jarToAttributedFiles: ListMap[File, Vector[Attributed[File]]] =
-      libsFiltered
-        .foldLeft(ListMap.empty[File, Vector[Attributed[File]]]) {
-          case (lm, f) =>
-            val canonicalJar = f.data.getCanonicalFile
-            lm.updated(canonicalJar, f +: lm.getOrElse(canonicalJar, Vector.empty))
-        }
+      if (!assemblyUnzipDir.exists) IO.createDirectory(assemblyUnzipDir)
+      if (assemblyDir.isDefined && !assemblyDir.get.exists) IO.createDirectory(assemblyDir.get)
 
-    for {
-      jar: File <- jarToAttributedFiles.keys.toVector.par
-      jarName = jar.asFile.getName
-      jarRules = assemblyOption.shadeRules
-        .filter { r =>
-          r.isApplicableToAll ||
-            jarToAttributedFiles.getOrElse(jar, Vector.empty)
-              .flatMap(_.metadata.get(moduleID.key))
-              .map(m => ModuleCoordinate(m.organization, m.name, m.revision))
-              .exists(r.isApplicableTo)
-        }
-      hash = sha1name(jar) + "_" + sha1content(jar) + "_" + sha1rules(jarRules)
-      jarOutputDir = (assemblyDir.getOrElse(assemblyUnzipDir) / hash).getCanonicalFile
-      lockPath = new File(jarOutputDir.getCanonicalPath + ".lock")
-    } yield state.locked(lockPath) {
-      // TODO: Canonical path might be problematic if mount points inside docker are different
-      val jarNameFinalPath = new File(jarOutputDir + ".jarName")
+      val unzippingIntoMessage: String = if (isCacheOnly && !isSameDir) "unzip cache" else "output cache"
 
-      val jarNameCachePath = assemblyUnzipDir / (hash + ".jarName")
-      val jarCacheDir = assemblyUnzipDir / hash
-
-      // If the jar name path does not exist, or is not for this jar, unzip the jar
-      if (!jarNameFinalPath.exists || IO.read(jarNameFinalPath) != jar.getCanonicalPath) {
-        log.info("Including: %s, for project: %s".format(jarName, projectIdMsg))
-
-        // Copy/Link from cache location if cache exists and is current
-        if (assemblyOption.cacheUnzip &&
-          jarNameCachePath.exists && IO.read(jarNameCachePath) == jar.getCanonicalPath &&
-          !jarNameFinalPath.exists
-          //(!jarNameFinalPath.exists || IO.read(jarNameFinalPath) != jar.getCanonicalPath)
-        ) {
-          if (useHardLinks) {
-            log.info("Creating hardlinks of %s from unzip cache: %s, to: %s, for project: %s".format(jarName, jarCacheDir, jarOutputDir, projectIdMsg))
-            AssemblyUtils.copyDirectory(jarCacheDir, jarOutputDir, hardLink = true)
-          } else {
-            log.info("Copying %s from unzip cache: %s, to: %s, for project: %s".format(jarName, jarCacheDir, jarOutputDir, projectIdMsg))
-            AssemblyUtils.copyDirectory(jarCacheDir, jarOutputDir, hardLink = false)
-          }
-          AssemblyUtils.copyDirectory(jarCacheDir, jarOutputDir, hardLink = useHardLinks)
-          IO.delete(jarNameFinalPath) // write after merge/shade rules applied
-          // Unzip into cache dir and copy over
-        } else if (assemblyOption.cacheUnzip && jarNameFinalPath != jarNameCachePath) {
-          IO.delete(jarCacheDir)
-          IO.delete(jarOutputDir)
-
-          IO.createDirectory(jarCacheDir)
-          IO.createDirectory(jarOutputDir)
-
-          log.info("Unzipping %s into unzip cache: %s for project: %s".format(jarName, jarCacheDir, projectIdMsg))
-          val files = AssemblyUtils.unzip(jar, jarCacheDir, log)
-
-          // TODO: This is kind of a hack, but doing it seems to prevent a docker file system issue preventing
-          //       FileNotFound exception after unzipping
-          files.foreach { f =>
-            assert(f.exists(), s"File $f not found after unzipping $jar into $jarCacheDir!")
-          }
-
-          if (useHardLinks) log.info("Creating hardlinks of %s from unzip cache: %s, to: %s, for project: %s".format(jarName, jarCacheDir, jarOutputDir, projectIdMsg))
-          else log.info("Copying %s from unzip cache: %s, to: %s, for project: %s".format(jarName, jarCacheDir, jarOutputDir, projectIdMsg))
-          AssemblyUtils.copyDirectory(jarCacheDir, jarOutputDir, hardLink = useHardLinks)
-          // Don't use cache dir, just unzip to output cache
+      val useHardLinks: Boolean = assemblyOption.cacheUseHardLinks && !isCacheOnly && {
+        if (isSameDir) {
+          log.warn(s"cacheUseHardLinks is enabled for project ($projectIdMsg), but assemblyUnzipDirectory is the same as assemblyDirectory ($assemblyUnzipDirectory)")
+          false
         } else {
-          IO.delete(jarOutputDir)
-          IO.createDirectory(jarOutputDir)
-          log.info("Unzipping %s into %s: %s, for project: %s".format(jarName, unzippingIntoMessage, jarOutputDir, projectIdMsg))
-          AssemblyUtils.unzip(jar, jarOutputDir, log)
+          val isHardLinkSupported = AssemblyUtils.isHardLinkSupported(sourceDir = assemblyUnzipDir, destDir = assemblyDir.get)
+          if (!isHardLinkSupported) log.warn(s"cacheUseHardLinks is enabled for project ($projectIdMsg), but file system doesn't support hardlinks between from $assemblyUnzipDir to ${assemblyDir.get}")
+          isHardLinkSupported
         }
-
-        if (!isCacheOnly) {
-          IO.delete(assemblyOption.excludedFiles(Seq(jarOutputDir)))
-          if (jarRules.nonEmpty) {
-            val mappings = ((jarOutputDir ** (-DirectoryFilter)).get pair relativeTo(jarOutputDir)) map {
-              case (k, v) => k.toPath -> v
-            }
-            val dirRules: Seq[ShadeRule] = assemblyOption.shadeRules.filter(_.isApplicableToCompiling)
-            Shader.shadeDirectory(dirRules, jarOutputDir.toPath, mappings, assemblyOption.level == Level.Debug)
-          }
-        }
-
-        // Write the jarNamePath at the end to minimise the chance of having a
-        // corrupt cache if the user aborts the build midway through
-        if (jarNameFinalPath != jarNameCachePath && !jarNameCachePath.exists)
-          IO.write(jarNameCachePath, jar.getCanonicalPath, IO.utf8, false)
-
-        IO.write(jarNameFinalPath, jar.getCanonicalPath, IO.utf8, false)
-      } else {
-        if (isCacheOnly) log.info("Unzip cache of %s is up to date, for project: %s".format(jarName, projectIdMsg))
-        else log.info("Including %s from output cache: %s, for project: %s".format(jarName, jarOutputDir, projectIdMsg))
       }
-      (jarOutputDir, jar)
+
+      // Ensure we are not processing the same File twice, retain original ordering
+      val jarToAttributedFiles: ListMap[File, Vector[Attributed[File]]] =
+        libsFiltered
+          .foldLeft(ListMap.empty[File, Vector[Attributed[File]]]) {
+            case (lm, f) =>
+              val canonicalJar = f.data.getCanonicalFile
+              lm.updated(canonicalJar, f +: lm.getOrElse(canonicalJar, Vector.empty))
+          }
+
+      for {
+        jar: File <- jarToAttributedFiles.keys.toVector.par
+        jarName = jar.asFile.getName
+        jarRules = assemblyOption.shadeRules
+          .filter { r =>
+            r.isApplicableToAll ||
+              jarToAttributedFiles.getOrElse(jar, Vector.empty)
+                .flatMap(_.metadata.get(moduleID.key))
+                .map(m => ModuleCoordinate(m.organization, m.name, m.revision))
+                .exists(r.isApplicableTo)
+          }
+        hash = sha1name(jar) + "_" + sha1content(jar) + "_" + sha1rules(jarRules)
+        jarOutputDir = (assemblyDir.getOrElse(assemblyUnzipDir) / hash).getCanonicalFile
+      } yield {
+        // TODO: Canonical path might be problematic if mount points inside docker are different
+        val jarNameFinalPath = new File(jarOutputDir + ".jarName")
+
+        val jarNameCachePath = assemblyUnzipDir / (hash + ".jarName")
+        val jarCacheDir = assemblyUnzipDir / hash
+
+        // If the jar name path does not exist, or is not for this jar, unzip the jar
+        if (!jarNameFinalPath.exists || IO.read(jarNameFinalPath) != jar.getCanonicalPath) {
+          log.info("Including: %s, for project: %s".format(jarName, projectIdMsg))
+
+          // Copy/Link from cache location if cache exists and is current
+          if (assemblyOption.cacheUnzip &&
+            jarNameCachePath.exists && IO.read(jarNameCachePath) == jar.getCanonicalPath &&
+            !jarNameFinalPath.exists
+          //(!jarNameFinalPath.exists || IO.read(jarNameFinalPath) != jar.getCanonicalPath)
+          ) {
+            if (useHardLinks) {
+              log.info("Creating hardlinks of %s from unzip cache: %s, to: %s, for project: %s".format(jarName, jarCacheDir, jarOutputDir, projectIdMsg))
+              AssemblyUtils.copyDirectory(jarCacheDir, jarOutputDir, hardLink = true)
+            } else {
+              log.info("Copying %s from unzip cache: %s, to: %s, for project: %s".format(jarName, jarCacheDir, jarOutputDir, projectIdMsg))
+              AssemblyUtils.copyDirectory(jarCacheDir, jarOutputDir, hardLink = false)
+            }
+            AssemblyUtils.copyDirectory(jarCacheDir, jarOutputDir, hardLink = useHardLinks)
+            IO.delete(jarNameFinalPath) // write after merge/shade rules applied
+            // Unzip into cache dir and copy over
+          } else if (assemblyOption.cacheUnzip && jarNameFinalPath != jarNameCachePath) {
+            IO.delete(jarCacheDir)
+            IO.delete(jarOutputDir)
+
+            IO.createDirectory(jarCacheDir)
+            IO.createDirectory(jarOutputDir)
+
+            log.info("Unzipping %s into unzip cache: %s for project: %s".format(jarName, jarCacheDir, projectIdMsg))
+            val files = AssemblyUtils.unzip(jar, jarCacheDir, log)
+
+            // TODO: This is kind of a hack, but doing it seems to prevent a docker file system issue preventing
+            //       FileNotFound exception after unzipping
+            files.foreach { f =>
+              assert(f.exists(), s"File $f not found after unzipping $jar into $jarCacheDir!")
+            }
+
+            if (useHardLinks) log.info("Creating hardlinks of %s from unzip cache: %s, to: %s, for project: %s".format(jarName, jarCacheDir, jarOutputDir, projectIdMsg))
+            else log.info("Copying %s from unzip cache: %s, to: %s, for project: %s".format(jarName, jarCacheDir, jarOutputDir, projectIdMsg))
+            AssemblyUtils.copyDirectory(jarCacheDir, jarOutputDir, hardLink = useHardLinks)
+            // Don't use cache dir, just unzip to output cache
+          } else {
+            IO.delete(jarOutputDir)
+            IO.createDirectory(jarOutputDir)
+            log.info("Unzipping %s into %s: %s, for project: %s".format(jarName, unzippingIntoMessage, jarOutputDir, projectIdMsg))
+            AssemblyUtils.unzip(jar, jarOutputDir, log)
+          }
+
+          if (!isCacheOnly) {
+            IO.delete(assemblyOption.excludedFiles(Seq(jarOutputDir)))
+            if (jarRules.nonEmpty) {
+              val mappings = ((jarOutputDir ** (-DirectoryFilter)).get pair relativeTo(jarOutputDir)) map {
+                case (k, v) => k.toPath -> v
+              }
+              val dirRules: Seq[ShadeRule] = assemblyOption.shadeRules.filter(_.isApplicableToCompiling)
+              Shader.shadeDirectory(dirRules, jarOutputDir.toPath, mappings, assemblyOption.level == Level.Debug)
+            }
+          }
+
+          // Write the jarNamePath at the end to minimise the chance of having a
+          // corrupt cache if the user aborts the build midway through
+          if (jarNameFinalPath != jarNameCachePath && !jarNameCachePath.exists)
+            IO.write(jarNameCachePath, jar.getCanonicalPath, IO.utf8, false)
+
+          IO.write(jarNameFinalPath, jar.getCanonicalPath, IO.utf8, false)
+        } else {
+          if (isCacheOnly) log.info("Unzip cache of %s is up to date, for project: %s".format(jarName, projectIdMsg))
+          else log.info("Including %s from output cache: %s, for project: %s".format(jarName, jarOutputDir, projectIdMsg))
+        }
+        (jarOutputDir, jar)
+      }
     }
   }
 
